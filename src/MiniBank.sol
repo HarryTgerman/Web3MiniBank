@@ -122,18 +122,15 @@ contract MiniBank is Ownable, ReentrancyGuard {
                                 ADMIN
     //////////////////////////////////////////////////////////////*/
 
-    function whitelistToken(address token) public onlyOwner {
+    function whitelistToken(address _token, address _oracle) public onlyOwner {
+        if (address == address(0) || oracle == address(0)) {
+            revert AddressZero();
+        }
         // TODO - switch owner to timelock contract
         // whitelist a token
-        whitelistedTokens[token] = true;
-        emit TokenWhitelisted(token);
-    }
-
-    function setOracle(address _token, address _oracle) public onlyOwner {
-        // set the oracle for a token
-        // !important - oracle has to return price in USD
-        // !important - oracle cannot return a negative value for asset
+        whitelistedTokens[_token] = true;
         tokenToOracle[_token] = _oracle;
+        emit TokenWhitelisted(_token);
         emit OracleSet(_token, _oracle);
     }
 
