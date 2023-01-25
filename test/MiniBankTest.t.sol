@@ -121,9 +121,8 @@ contract MiniBankTest is Test {
         assertEq(miniBank.balanceOf(address(usd), USER1), 0);
         assertEq(miniBank.balanceOf(address(usd), USER2), 100 ether);
         vm.stopPrank();
-        // vm.roll(2); // reset state
+
         // test revert if transfer base currency but not enough approved
-        // test_deposit();
         vm.startPrank(USER1);
         miniBank.approve(USER2, 100 ether); // approve value in USD Terms
         vm.stopPrank();
