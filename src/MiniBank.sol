@@ -1,9 +1,3 @@
-// Your mission is to develop the smart-contracts of a mini Web3 bank infrastructure.
-// MiniBank allows users to make basic banking operations (get balance, deposit, withdraw) and should support multiple tokens, i.e., USD,EUR,GBP. MiniBank needs to support new tokens in the future.
-// Feel free to make assumptions, but please add comments or assertions describing the assumptions you are making.
-// You should create one or multiple smart-contracts that implement your version of MiniBank.
-// It should be written in Solidity. It should be an independent repository, complete with a README, tests, comments, and any other documentations expected in high quality software engineering.
-
 // SPDX-License-Identifier: MIT
 pragma solidity ^0.8.17;
 
@@ -16,18 +10,20 @@ import "@chainlink/interfaces/AggregatorV3Interface.sol";
 
 contract MiniBank is Ownable, ReentrancyGuard {
     using SafeERC20 for IERC20;
+    address immutable baseCurrency;
     mapping(address => mapping(address => uint256)) public balances;
     mapping(address => mapping(address => uint256))
         public approvedForValueInUSD;
     mapping(address => bool) public whitelistedTokens;
     mapping(address => address) public tokenToOracle;
 
-    constructor(address token, address oracle) {
-        if (address == address(0) || oracle == address(0)) {
+    constructor(address _token, address _oracle) {
+        if (_token == address(0) || _oracle == address(0)) {
             revert AddressZero();
         }
-        whitelistedTokens[token] = true;
-        tokenToOracle[token] = oracle;
+        whitelistedTokens[_token] = true;
+        tokenToOracle[_token] = _oracle;
+        baseCurrency = _token;
     }
 
     /*//////////////////////////////////////////////////////////////
@@ -38,25 +34,28 @@ contract MiniBank is Ownable, ReentrancyGuard {
         address _token,
         uint256 _amount,
         address _receiver
-    ) public onlyWhitelistedToken(token) nonReentrant {
+    ) public tokenIsWhitelisted(_token) nonReentrant {
         // deposit a token to the bank
-        IERC20(token).safeTransferFrom(_receiver, address(this), amount);
+        IERC20(_token).safeTransferFrom(_receiver, address(this), _amount);
 
         _mint(_token, _receiver, _amount);
 
-        emit Deposit(_receiver, token, amount);
+        emit Deposit(_receiver, _token, _amount);
     }
 
     function withdraw(
         address _token,
         uint256 _amount,
         address _receiver
-    ) public nonReentrant onlyWhiteListedToken(_token) {
+    ) public tokenIsWhitelisted(_token) nonReentrant {
         // withdraw a token from the bank
         if (msg.sender != _receiver) {
+            // check if value of amount is is big
             if (
-                approvedForValueInUSD[_receiver][msg.sender] >
-                getValueInUSD(_token, _amount)
+                getValueInUSD(
+                    baseCurrency,
+                    approvedForValueInUSD[_receiver][msg.sender]
+                ) < getValueInUSD(_token, _amount)
             ) {
                 revert InsufficientApprovedAmount(
                     _amount,
@@ -73,11 +72,11 @@ contract MiniBank is Ownable, ReentrancyGuard {
         address _token,
         address _to,
         uint256 _amount
-    ) public onlyWhiteListedToken(_token) {
+    ) public tokenIsWhitelisted(_token) {
         // transfer a token to another user
         _burn(_token, msg.sender, _amount);
         _mint(_token, _to, _amount);
-        emit Transfer(msg.sender, _to, _token, amount);
+        emit Transfer(msg.sender, _to, _token, _amount);
     }
 
     function transferFrom(
@@ -85,36 +84,33 @@ contract MiniBank is Ownable, ReentrancyGuard {
         address _from,
         address _to,
         uint256 _amount
-    ) public onlyWhiteListedToken(_token) {
+    ) public tokenIsWhitelisted(_token) {
         // transfer a token from another user
-        if (msg.sender != from) {
+        if (msg.sender != _from) {
             if (
-                approvedForValueInUSD[from][msg.sender] >
-                getValueInUSD(_token, _amount)
+                getValueInUSD(
+                    baseCurrency,
+                    approvedForValueInUSD[_from][msg.sender]
+                ) < getValueInUSD(_token, _amount)
             ) {
                 revert InsufficientApprovedAmount(
                     _amount,
-                    approvedForValueInUSD[from][msg.sender]
+                    approvedForValueInUSD[_from][msg.sender]
                 );
             }
         }
 
         _burn(_token, _from, _amount);
         _mint(_token, _to, _amount);
-        emit Transfer(_from, _to, _token, amount);
+        emit Transfer(_from, _to, _token, _amount);
 
         // TODO - check if receiver can hold balance on MiniBank
     }
 
-    function approveValueInUSD(address _operator, uint256 _value)
-        public
-        returns (bool)
-    {
+    function approve(address _operator, uint256 _value) public {
         // value has to be scaled to 18 decimals
-        // approve a token transfer
-        approvedForValueInUSD[msg.sender][_operator] = _value;
-        emit ApprovedForValue(msg.sender, operator, approved);
-
+        // value has to be based in USD terms
+        _approveForValueInUSD(_operator, _value);
         // optional set expiry time for approval
     }
 
@@ -123,11 +119,11 @@ contract MiniBank is Ownable, ReentrancyGuard {
     //////////////////////////////////////////////////////////////*/
 
     function whitelistToken(address _token, address _oracle) public onlyOwner {
-        if (address == address(0) || oracle == address(0)) {
+        if (_token == address(0) || _oracle == address(0)) {
             revert AddressZero();
         }
         // TODO - switch owner to timelock contract
-        // whitelist a token
+        // whitelist token
         whitelistedTokens[_token] = true;
         tokenToOracle[_token] = _oracle;
         emit TokenWhitelisted(_token);
@@ -144,7 +140,7 @@ contract MiniBank is Ownable, ReentrancyGuard {
         uint256 _amount
     ) internal {
         // mint a token
-        balances[_to][token] += amount;
+        balances[_to][_token] += _amount;
     }
 
     function _burn(
@@ -153,11 +149,18 @@ contract MiniBank is Ownable, ReentrancyGuard {
         uint256 _amount
     ) internal {
         // burn a token
-        if (balances[_from][token] < amount) {
-            revert InsufficientBalance(amount, balances[_from][token]);
+        if (balances[_from][_token] < _amount) {
+            revert InsufficientBalance(_amount, balances[_from][_token]);
         }
 
-        balances[_from][token] -= amount;
+        balances[_from][_token] -= _amount;
+    }
+
+    function _approveForValueInUSD(address _operator, uint256 _value) internal {
+        approvedForValueInUSD[msg.sender][_operator] = _value;
+        emit ApprovedForValue(msg.sender, _operator, _value);
+
+        // optional set expiry time for approval
     }
 
     /*//////////////////////////////////////////////////////////////
@@ -172,17 +175,17 @@ contract MiniBank is Ownable, ReentrancyGuard {
         if (whitelistedTokens[_token] == false) return 0;
         // get the value of a token in USD
         // get oracle price of token
-        return _amount * uint256(getLatestPrice(_token));
+        return (_amount * uint256(getLatestPrice(_token))) / 1e18;
     }
 
-    function getBalance(address token, address _user)
+    function getBalance(address _token, address _user)
         public
         view
         returns (uint256)
     {
         // TODO
         // get the balance of a token for the caller
-        return balances[_user][token];
+        return balances[_user][_token];
     }
 
     /** @notice Lookup token price
@@ -200,13 +203,15 @@ contract MiniBank is Ownable, ReentrancyGuard {
         (uint80 roundID, int256 price, , , uint80 answeredInRound) = priceFeed
             .latestRoundData();
 
-        if (priceFeed.decimals() < 18) {
-            uint256 decimals = 10**(18 - (priceFeed.decimals()));
+        uint256 decimals = priceFeed.decimals();
+
+        if (decimals < 18) {
+            decimals = 10**(18 - (decimals));
             price = price * int256(decimals);
-        } else if (priceFeed.decimals() == 18) {
+        } else if (decimals == 18) {
             price = price;
         } else {
-            uint256 decimals = 10**((priceFeed.decimals() - 18));
+            decimals = 10**((decimals - 18));
             price = price / int256(decimals);
         }
 
@@ -217,14 +222,33 @@ contract MiniBank is Ownable, ReentrancyGuard {
         return price;
     }
 
+    function allowance(address _owner, address _operator)
+        public
+        view
+        returns (uint256)
+    {
+        // get the USD value of an approval for an operator
+        // scale to 18 decimals
+        return approvedForValueInUSD[_owner][_operator];
+    }
+
+    function balanceOf(address _token, address _user)
+        public
+        view
+        returns (uint256)
+    {
+        // get the balance of a token for a user
+        return balances[_user][_token];
+    }
+
     /*//////////////////////////////////////////////////////////////
                                 MODIFIERS
     //////////////////////////////////////////////////////////////*/
 
-    modifier onlyWhitelistedToken(address token) {
+    modifier tokenIsWhitelisted(address _token) {
         // only whitelisted tokens can be used
-        if (whitelistedTokens[token] == false)
-            revert TokenNotWhitelisted(token);
+        if (whitelistedTokens[_token] == false)
+            revert TokenNotWhitelisted(_token);
         _;
     }
 
